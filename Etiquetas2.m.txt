@@ -1,0 +1,113 @@
+% Configuración inicial
+carpeta = 'D:\Israel\Imagenes\Artículo_Ago_2025\Mediana_originales\Etiquetas';
+sufijos = {'_BxGt_b', '_LgGt_b', '_MnGt_b'};
+ext = '.bmp';
+
+% Parámetros de procesamiento
+elementoEstructurante = strel('disk', 3);  % Tamaño del disco para cierre
+
+% Obtener lista de imágenes originales
+archivos = dir(fullfile(carpeta, ['*' ext]));
+nombresOriginales = {};
+for i = 1:length(archivos)
+    nombre = archivos(i).name;
+    esGradiente = false;
+    for sufijo = sufijos
+        if contains(nombre, sufijo{1})
+            esGradiente = true;
+            break;
+        end
+    end
+    if ~esGradiente
+        nombresOriginales{end+1} = nombre;
+    end
+end
+
+fprintf('Se encontraron %d imágenes originales\n', length(nombresOriginales));
+
+% Procesar cada imagen original
+for i = 1:length(nombresOriginales)
+    nombreOrig = nombresOriginales{i};
+    [~, baseName, ~] = fileparts(nombreOrig);
+    fprintf('\nProcesando: %s\n', nombreOrig);
+    
+    try
+        % Cargar imagen original
+        imgPath = fullfile(carpeta, nombreOrig);
+        imagenColor = imread(imgPath);
+        
+        % Procesar cada tipo de gradiente
+        for j = 1:length(sufijos)
+            sufijo = sufijos{j};
+            nombreGrad = [baseName sufijo ext];
+            gradPath = fullfile(carpeta, nombreGrad);
+            fprintf('-- Gradiente: %s\n', nombreGrad);
+            
+            % Verificar existencia
+            if ~isfile(gradPath)
+                fprintf('   [ADVERTENCIA] Archivo no encontrado: %s\n', gradPath);
+                continue;
+            end
+            
+            % Cargar imagen de gradiente
+            gradienteBinario = imread(gradPath);
+            
+            % Convertir la imagen de gradiente a binaria (si no lo es)
+            if size(gradienteBinario, 3) == 3
+                gradienteBinario = im2gray(gradienteBinario) > 0;  % Umbralizar si es necesario
+            end
+            
+            % 1. Cerrar pequeños huecos en los bordes
+            bordesCerrados = imclose(gradienteBinario, elementoEstructurante);
+            
+            % 2. Invertir la máscara para obtener regiones
+            mascaraRegiones = ~bordesCerrados;
+            
+            % 3. Limpiar bordes y rellenar agujeros
+            mascaraRegiones = imclearborder(mascaraRegiones);  % Eliminar regiones que tocan bordes
+            mascaraRegiones = imfill(mascaraRegiones, 'holes');  % Rellenar huecos internos
+            
+            % 4. Etiquetar regiones conectadas
+            [etiquetas, numRegiones] = bwlabel(mascaraRegiones, 8);  % 8-conectividad
+            
+            % 5. Calcular y aplicar colores promedio
+            imagenResultado = zeros(size(imagenColor), 'like', imagenColor);  % Inicializar en negro
+            
+            for k = 1:numRegiones
+                % Máscara para la región actual
+                mascara = (etiquetas == k);
+                
+                % Calcular color promedio en cada canal (R, G, B)
+                r = imagenColor(:,:,1);
+                g = imagenColor(:,:,2);
+                b = imagenColor(:,:,3);
+                
+                colorPromedio = [mean(r(mascara)), mean(g(mascara)), mean(b(mascara))];
+                
+                % Aplicar el color a la región en la imagen de salida
+                for canal = 1:3
+                    canalImg = imagenResultado(:,:,canal);
+                    canalImg(mascara) = colorPromedio(canal);
+                    imagenResultado(:,:,canal) = canalImg;
+                end
+            end
+            
+            % Guardar resultado
+            nombreSalida = [baseName sufijo '-e' ext];
+            salidaPath = fullfile(carpeta, nombreSalida);
+            imwrite(imagenResultado, salidaPath);
+            fprintf('   [ÉXITO] Guardado: %s\n', nombreSalida);
+            
+            % Opcional: Mostrar resultados (comentar para procesamiento por lotes)
+            % figure;
+            % subplot(1,3,1), imshow(imagenColor), title('Original');
+            % subplot(1,3,2), imshow(gradienteBinario), title('Gradiente');
+            % subplot(1,3,3), imshow(imagenResultado), title('Regiones rellenadas');
+        end
+    catch ME
+        fprintf('   [ERROR] Procesando %s: %s\n', nombreOrig, ME.message);
+        fprintf('   Línea: %d\n', ME.stack(1).line);
+    end
+end
+
+fprintf('\nProcesamiento completo! Revise los mensajes anteriores.\n');

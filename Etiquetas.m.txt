@@ -1,0 +1,135 @@
+% Configuración inicial
+carpeta = 'D:\Israel\Imagenes\Artículo_Ago_2025\Mediana_originales\Etiquetas';
+sufijos = {'_BxGt_b', '_LgGt_b', '_MnGt_b'};
+ext = '.bmp';
+
+% Parámetros de procesamiento
+elementoGrande = strel('disk', 7);
+tamDilatacion = strel('disk', 2);
+minArea = 50;
+
+% Obtener lista de imágenes originales
+archivos = dir(fullfile(carpeta, ['*' ext]));
+nombresOriginales = {};
+for i = 1:length(archivos)
+    nombre = archivos(i).name;
+    esGradiente = false;
+    for sufijo = sufijos
+        if contains(nombre, sufijo{1})
+            esGradiente = true;
+            break;
+        end
+    end
+    if ~esGradiente
+        nombresOriginales{end+1} = nombre;
+    end
+end
+
+fprintf('Se encontraron %d imágenes originales\n', length(nombresOriginales));
+
+% Procesar cada imagen original
+for i = 1:length(nombresOriginales)
+    nombreOrig = nombresOriginales{i};
+    [~, baseName, ~] = fileparts(nombreOrig);
+    fprintf('\nProcesando: %s\n', nombreOrig);
+    
+    try
+        % Cargar imagen original
+        imgPath = fullfile(carpeta, nombreOrig);
+        imgColor = imread(imgPath);
+        imgColorDouble = im2double(imgColor);  % Convertir a double para cálculos
+        
+        % Procesar cada tipo de gradiente
+        for j = 1:length(sufijos)
+            sufijo = sufijos{j};
+            nombreGrad = [baseName sufijo ext];
+            gradPath = fullfile(carpeta, nombreGrad);
+            fprintf('-- Gradiente: %s\n', nombreGrad);
+            
+            % Verificar existencia
+            if ~isfile(gradPath)
+                fprintf('   [ADVERTENCIA] Archivo no encontrado: %s\n', gradPath);
+                continue;
+            end
+            
+            % Cargar y procesar imagen de gradiente
+            gradBin = imread(gradPath);
+            
+            % Convertir a binario
+            if islogical(gradBin)
+                binario = gradBin;
+            elseif size(gradBin, 3) == 3
+                binario = imbinarize(rgb2gray(gradBin));
+            else
+                binario = imbinarize(gradBin);
+            end
+            
+            % Procesamiento morfológico
+            bordesCerrados = imclose(binario, elementoGrande);
+            bordesDilatados = imdilate(bordesCerrados, tamDilatacion);
+            
+            % Crear máscara de regiones
+            mascaraReg = ~bordesDilatados;
+            mascaraReg = imfill(mascaraReg, 'holes');
+            mascaraReg = bwareaopen(mascaraReg, minArea);
+            
+            % Etiquetar regiones
+            [etiquetas, numRegiones] = bwlabel(mascaraReg, 8);
+            fprintf('   Regiones identificadas: %d\n', numRegiones);
+            
+            % Crear imagen resultante
+            imgResult = zeros(size(imgColorDouble), 'like', imgColorDouble);
+            
+            % Manejar caso especial: sin regiones
+            if numRegiones == 0
+                fprintf('   [ADVERTENCIA] No se encontraron regiones\n');
+                imgResult = imgColorDouble;  % Usar imagen original
+            else
+                % Rellenar regiones con color promedio
+                for k = 1:numRegiones
+                    mascara = (etiquetas == k);
+                    
+                    for canal = 1:3
+                        canalData = imgColorDouble(:,:,canal);
+                        valores = canalData(mascara);
+                        
+                        if ~isempty(valores)
+                            promedio = mean(valores(:));
+                            tempCanal = imgResult(:,:,canal);
+                            tempCanal(mascara) = promedio;
+                            imgResult(:,:,canal) = tempCanal;
+                        end
+                    end
+                end
+                
+                % Rellenar áreas no etiquetadas
+                for canal = 1:3
+                    canalRes = imgResult(:,:,canal);
+                    canalOriginal = imgColorDouble(:,:,canal);
+                    canalRes(~mascaraReg) = canalOriginal(~mascaraReg);
+                    imgResult(:,:,canal) = canalRes;
+                end
+            end
+            
+            % Convertir al tipo original
+            if isa(imgColor, 'uint8')
+                imgResultFinal = im2uint8(imgResult);
+            elseif isa(imgColor, 'uint16')
+                imgResultFinal = im2uint16(imgResult);
+            else
+                imgResultFinal = imgResult;
+            end
+            
+            % Guardar resultado
+            nombreSalida = [baseName sufijo '-e' ext];
+            salidaPath = fullfile(carpeta, nombreSalida);
+            imwrite(imgResultFinal, salidaPath);
+            fprintf('   [ÉXITO] Guardado: %s\n', nombreSalida);
+        end
+    catch ME
+        fprintf('   [ERROR] Procesando %s: %s\n', nombreOrig, ME.message);
+        fprintf('   Línea: %d\n', ME.stack(1).line);
+    end
+end
+
+fprintf('\nProcesamiento completo! Revise los mensajes anteriores.\n');
